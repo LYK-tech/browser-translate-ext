@@ -1,5 +1,14 @@
 "use strict";
 
+// 在后台 Service Worker 中加载离线 OCR 引擎（tesseract.js v5）。
+// 必须在后台运行：content script 内创建的 Worker 以“页面源站”运行，无法跨源读取扩展内的
+// wasm/语言包；而后台 Worker 以扩展源站（chrome-extension://）运行，可正常加载本地 OCR 资源。
+try {
+  importScripts(chrome.runtime.getURL("ocr/tesseract.min.js"));
+} catch (e) {
+  console.warn("[translate-ext] Tesseract 加载失败：", e);
+}
+
 const DICT = "https://api.dictionaryapi.dev/api/v2/entries/en/";
 const GT = "https://translate.googleapis.com/translate_a/single?client=gtx";
 
@@ -135,7 +144,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.type === "ocrTranslate") {
+    handleOCR(msg).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
 });
+
+// ===== 截图翻译：在后台用本地 OCR 识别裁剪图，再翻译 =====
+async function handleOCR(msg) {
+  if (typeof Tesseract === "undefined") throw new Error("OCR 引擎未加载，请重载扩展");
+  const OCR_OPTS = {
+    workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
+    corePath: chrome.runtime.getURL("ocr/tesseract-core.wasm.js"),
+    langPath: chrome.runtime.getURL("ocr/")
+  };
+  const res = await Tesseract.recognize(msg.image, "eng", OCR_OPTS);
+  const text = (res.data.text || "").replace(/\s+/g, " ").trim();
+  if (!text) throw new Error("未能识别到文字");
+  const word = isWordLocal(text);
+  const tr = await handleTranslate({ text: text, word: word, hasCJK: false });
+  return { ok: true, text: text, data: tr.data };
+}
 
 // 右键菜单
 chrome.runtime.onInstalled.addListener(() => {

@@ -180,12 +180,6 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { removePanel(); exitShot(); } });
 
   // ===== 截图翻译 =====
-  const OCR_OPTS = {
-    workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
-    corePath: chrome.runtime.getURL("ocr/tesseract-core.wasm.js"),
-    langPath: chrome.runtime.getURL("ocr/")
-  };
-
   let shotLayer = null, shotImg = null, selBox = null, startX = 0, startY = 0;
 
   function exitShot() {
@@ -198,7 +192,7 @@
     shotLayer.style.cssText = "position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(0,0,0,.35)";
     const img = document.createElement("img");
     img.src = shotImg.src;
-    img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:none;pointer-events:none;opacity:.6";
+    img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill;pointer-events:none;opacity:.6";
     shotLayer.appendChild(img);
     selBox = document.createElement("div");
     selBox.style.cssText = "position:absolute;border:2px dashed #3b82f6;background:rgba(59,130,246,.12);display:none";
@@ -250,30 +244,30 @@
   async function doOCR(rect) {
     try {
       const natW = shotImg.naturalWidth, natH = shotImg.naturalHeight;
-      const dispW = shotImg.width || shotLayer.clientWidth;
-      const dispH = shotImg.height || shotLayer.clientHeight;
+      const dispW = shotImg.clientWidth || shotLayer.clientWidth;
+      const dispH = shotImg.clientHeight || shotLayer.clientHeight;
       const scaleX = natW / dispW, scaleY = natH / dispH;
-      const sx = Math.max(0, rect.left * scaleX), sy = Math.max(0, rect.top * scaleY);
-      const sw = Math.max(1, rect.width * scaleX), sh = Math.max(1, rect.height * scaleY);
+      const sx = Math.max(0, Math.round(rect.left * scaleX));
+      const sy = Math.max(0, Math.round(rect.top * scaleY));
+      const sw = Math.max(1, Math.round(rect.width * scaleX));
+      const sh = Math.max(1, Math.round(rect.height * scaleY));
       const canvas = document.createElement("canvas");
-      canvas.width = Math.round(sw); canvas.height = Math.round(sh);
-      canvas.getContext("2d").drawImage(shotImg, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      canvas.width = sw; canvas.height = sh;
+      canvas.getContext("2d").drawImage(shotImg, sx, sy, sw, sh, 0, 0, sw, sh);
       const cropUrl = canvas.toDataURL("image/png");
 
       showFloatAt(rect, "⟳ OCR 识别中…");
-      const res = await Tesseract.recognize(cropUrl, "eng", OCR_OPTS);
-      const text = (res.data.text || "").replace(/\s+/g, " ").trim();
-      removePanel();
-      if (!text) { showFloatAt(rect, "未能识别到文字").classList.add("wb-err"); return; }
-      const word = isWord(text);
-      chrome.runtime.sendMessage({ type: "translate", text: text, word: word, hasCJK: false }, (r) => {
-        if (chrome.runtime.lastError || !r || !r.ok) {
-          showFloatAt(rect, (r && r.error) || "翻译失败").classList.add("wb-err");
-          return;
-        }
-        const p = render(text, r.data, word);
-        positionRect(p, rect);
+      const resp = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "ocrTranslate", image: cropUrl }, resolve);
       });
+      removePanel();
+      if (chrome.runtime.lastError || !resp || !resp.ok) {
+        showFloatAt(rect, (resp && resp.error) || "OCR/翻译失败").classList.add("wb-err");
+        return;
+      }
+      const word = isWord(resp.text);
+      const p = render(resp.text, resp.data, word);
+      positionRect(p, rect);
     } catch (err) {
       removePanel();
       showFloatAt(rect, "OCR 失败：" + err.message).classList.add("wb-err");
