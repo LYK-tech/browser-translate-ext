@@ -1,14 +1,5 @@
 "use strict";
 
-// 在后台 Service Worker 中加载离线 OCR 引擎（tesseract.js v5）。
-// 必须在后台运行：content script 内创建的 Worker 以“页面源站”运行，无法跨源读取扩展内的
-// wasm/语言包；而后台 Worker 以扩展源站（chrome-extension://）运行，可正常加载本地 OCR 资源。
-try {
-  importScripts(chrome.runtime.getURL("ocr/tesseract.min.js"));
-} catch (e) {
-  console.warn("[translate-ext] Tesseract 加载失败：", e);
-}
-
 const DICT = "https://api.dictionaryapi.dev/api/v2/entries/en/";
 const GT = "https://translate.googleapis.com/translate_a/single?client=gtx";
 
@@ -151,7 +142,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ===== 截图翻译：在后台用本地 OCR 识别裁剪图，再翻译 =====
+// 延迟（懒）加载 tesseract：避免顶层 importScripts 在 SW 启动时抛错导致整个后台脚本注册失败
+// （一旦后台脚本注册失败，键盘快捷键、右键菜单、工具栏点击等全部失效）。
+let _tesseractLoaded = false;
+function ensureTesseract() {
+  if (_tesseractLoaded) return;
+  importScripts(chrome.runtime.getURL("ocr/tesseract.min.js"));
+  _tesseractLoaded = true;
+}
+
 async function handleOCR(msg) {
+  try { ensureTesseract(); } catch (e) { throw new Error("OCR 引擎加载失败：" + e.message); }
   if (typeof Tesseract === "undefined") throw new Error("OCR 引擎未加载，请重载扩展");
   const OCR_OPTS = {
     workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
