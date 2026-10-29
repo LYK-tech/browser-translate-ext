@@ -275,7 +275,7 @@
     showFloatAt(rect, "⟳ OCR 识别中…");
     try {
       const resp = await new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error("OCR 请求超时（35s），请到 edge://extensions 重新加载扩展后点“重新加载”重试")), 35000);
+        const t = setTimeout(() => reject(new Error("OCR 请求超时（50s），请到 edge://extensions 重新加载扩展后点“重新加载”重试")), 50000);
         chrome.runtime.sendMessage({ type: "ocrTranslate", image: cropUrl }, (r) => {
           clearTimeout(t);
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
