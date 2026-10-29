@@ -7,6 +7,18 @@
 
 let workerPromise = null;
 let lastStatus = "(未开始)";
+let lastError = "";
+
+// 捕获 offscreen 文档与 worker 内的真实错误（CSP / 加载 / 实例化失败等），
+// 这样超时不再只显示一句笼统的“超时”，而是把真正的根因带出来。
+self.addEventListener("error", (ev) => {
+  lastError = (ev && ev.message) ? ev.message : String(ev);
+  // 若是 worker 资源加载失败（如 wasm 被 CSP 拦截），ev 可能带 filename
+  if (ev && ev.filename) lastError += " @ " + ev.filename;
+});
+self.addEventListener("unhandledrejection", (ev) => {
+  lastError = (ev && ev.reason && ev.reason.message) ? ev.reason.message : String(ev && ev.reason);
+});
 
 function withTimeout(p, ms, label) {
   let t;
@@ -25,6 +37,9 @@ async function tryCreateWorker(corePath) {
     corePath: corePath,
     langPath: chrome.runtime.getURL("ocr/"),
     workerBlobURL: false,           // 直接使用扩展内 worker 脚本（同源，避免 blob: 被 CSP 拦截）
+    errorHandler: (e) => {          // tesseract worker 内部报错时回传真实错误
+      lastError = (e && e.message) ? e.message : String(e);
+    },
     logger: (m) => { if (m && m.status) lastStatus = m.status; }
   });
   await worker.setParameters({ tessedit_pageseg_mode: 6 });
@@ -74,6 +89,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // 保留堆栈前几行，便于在“复制错误”里定位根因
       error = (e && e.message ? e.message : String(e));
       if (e && e.stack) error += " :: " + e.stack.split("\n").slice(0, 2).join(" ").slice(0, 200);
+      if (lastError) error += " [底层错误：" + lastError + "]";
     }
     // 通过独立的 runtime 消息把结果回传给后台 Service Worker（按 reqId 关联）
     chrome.runtime.sendMessage({ type: "ocrResult", reqId: msg.reqId, text: text, error: error });
