@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "划词翻译 · 英中",
+  "version": "1.0",
+  "description": "选中网页上的英文，自动显示高质量中文翻译。单词列出音标、词性与多种常见释义；句子/短语直接翻译为中文。",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": [
+    "https://api.dictionaryapi.dev/*",
+    "https://translate.googleapis.com/*",
+    "https://api.openai.com/*",
+    "https://api.deepseek.com/*",
+    "https://api.moonshot.cn/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.together.xyz/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://open.bigmodel.cn/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

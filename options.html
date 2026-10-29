@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>划词翻译 · 设置</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,'PingFang SC','Microsoft YaHei',sans-serif;max-width:540px;margin:24px auto;padding:0 16px;color:#1f2329}
+  h2{margin-bottom:4px}
+  .sub{color:#888;font-size:13px;margin-bottom:18px}
+  label{display:block;margin:14px 0 4px;font-weight:600}
+  .hint{color:#888;font-size:12px;margin-top:3px;line-height:1.5}
+  input,select{width:100%;padding:9px;box-sizing:border-box;border:1px solid #ccc;border-radius:6px;font-size:14px}
+  .row{display:flex;gap:10px;align-items:center}
+  .row input{width:auto}
+  button{margin-top:20px;padding:10px 20px;border:0;background:#2b6cff;color:#fff;border-radius:6px;cursor:pointer;font-size:14px}
+  button:hover{background:#1f5be0}
+  #msg{color:#16a34a;margin-top:12px;font-size:14px;min-height:18px}
+  #llmBox{border:1px dashed #cbd5e1;border-radius:10px;padding:8px 14px 14px;margin-top:8px}
+</style>
+</head>
+<body>
+  <h2>划词翻译 · 设置</h2>
+  <div class="sub">默认使用免费引擎，开箱即用；如需最高翻译质量，可在下方配置大模型（LLM）密钥。</div>
+
+  <div class="row"><input type="checkbox" id="enabled" checked><label for="enabled" style="margin:0">启用划词翻译</label></div>
+
+  <label for="mode">翻译引擎</label>
+  <select id="mode">
+    <option value="free">免费引擎（默认，无需配置）</option>
+    <option value="llm">大模型（质量最高，需填写下方密钥）</option>
+  </select>
+
+  <div id="llmBox">
+    <label>API 地址（OpenAI 兼容）</label>
+    <input id="apiBase" placeholder="https://api.deepseek.com/v1">
+    <div class="hint">DeepSeek 填 https://api.deepseek.com/v1；OpenAI 填 https://api.openai.com/v1；其他兼容服务填其 chat/completions 所在基址。</div>
+
+    <label>API Key</label>
+    <input id="apiKey" type="password" placeholder="sk-...">
+
+    <label>模型名</label>
+    <input id="model" placeholder="deepseek-chat">
+    <div class="hint">DeepSeek 用 deepseek-chat；OpenAI 用 gpt-4o-mini 等。密钥仅保存在你本地浏览器，不会上传到任何第三方。</div>
+  </div>
+
+  <button id="save">保存</button>
+  <div id="msg"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
