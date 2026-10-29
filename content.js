@@ -18,6 +18,7 @@
 .wb-ex{color:#7a8290;font-size:12px;margin-top:2px;font-style:italic;word-break:break-word}
 .wb-err{color:#d4380d}
 .wb-retry{margin-top:10px;background:#3b82f6;color:#fff;border:0;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
+.wb-copy{margin-top:10px;margin-left:8px;background:#fff;border:1px solid #d4380d;color:#d4380d;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px}
 .wb-trans-loading{padding:14px;color:#888}
 `;
 
@@ -182,6 +183,7 @@
 
   // ===== 截图翻译 =====
   let shotLayer = null, shotImg = null, selBox = null, startX = 0, startY = 0;
+  let lastCrop = null, lastRect = null;   // 记住最近一次裁剪图与选区，供“重新加载”复用，无需重新截图
 
   function exitShot() {
     if (shotLayer && shotLayer.parentNode) shotLayer.parentNode.removeChild(shotLayer);
@@ -245,6 +247,7 @@
     });
   }
 
+  // 第一次：从已截图的 shotImg 中裁剪选区
   async function doOCR(rect) {
     try {
       const natW = shotImg.naturalWidth, natH = shotImg.naturalHeight;
@@ -259,11 +262,20 @@
       canvas.width = sw; canvas.height = sh;
       canvas.getContext("2d").drawImage(shotImg, sx, sy, sw, sh, 0, 0, sw, sh);
       const cropUrl = canvas.toDataURL("image/png");
+      lastCrop = cropUrl; lastRect = rect;     // 记住，供“重新加载”复用
+      await runOCR(cropUrl, rect);
+    } catch (err) {
+      exitShot();
+      showOCRError(rect, "OCR 失败：" + err.message);
+    }
+  }
 
-      showFloatAt(rect, "⟳ OCR 识别中…");
-      // 加超时保护：后台若一直不回，35s 后给出可重试的错误，而不是永远“识别中”
+  // 真正执行 OCR + 翻译的网络往返；成功渲染，失败显示可重试的提示
+  async function runOCR(cropUrl, rect) {
+    showFloatAt(rect, "⟳ OCR 识别中…");
+    try {
       const resp = await new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error("OCR 请求超时（请到 edge://extensions 重载扩展后重试）")), 35000);
+        const t = setTimeout(() => reject(new Error("OCR 请求超时（35s），请到 edge://extensions 重新加载扩展后点“重新加载”重试")), 35000);
         chrome.runtime.sendMessage({ type: "ocrTranslate", image: cropUrl }, (r) => {
           clearTimeout(t);
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
@@ -286,12 +298,36 @@
     }
   }
 
+  // “重新加载”：用同一张裁剪图重新发起 OCR 识别，不再要求重新截图
+  function retryOCR() {
+    if (lastCrop && lastRect) runOCR(lastCrop, lastRect);
+    else startScreenshot();
+  }
+
   function showOCRError(rect, msg) {
     const p = showFloatAt(rect, "");
     const box = p.querySelector(".wb-trans-loading");
-    box.innerHTML = '<div class="wb-err">' + esc(msg) + '</div><button class="wb-retry" type="button">重试</button>';
-    box.querySelector(".wb-retry").addEventListener("click", () => { removePanel(); startScreenshot(); });
+    box.innerHTML = '<div class="wb-err">' + esc(msg) + '</div>'
+      + '<button class="wb-retry" type="button">重新加载</button>'
+      + '<button class="wb-copy" type="button">复制错误</button>';
+    box.querySelector(".wb-retry").addEventListener("click", () => { removePanel(); retryOCR(); });
+    box.querySelector(".wb-copy").addEventListener("click", () => {
+      const txt = msg;
+      const done = () => { const b = box.querySelector(".wb-copy"); if (b) b.textContent = "已复制"; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+      } else fallbackCopy(txt, done);
+    });
     return p;
+  }
+
+  function fallbackCopy(text, done) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); document.body.removeChild(ta); done();
+    } catch (e) { /* 复制失败忽略 */ }
   }
 
   function showFloatAt(rect, txt) {

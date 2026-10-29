@@ -219,16 +219,24 @@ let ocrReqId = 0;
 async function handleOCR(msg) {
   const reqId = ++ocrReqId;
   const done = new Promise((resolve) => ocrPending.set(reqId, resolve));
-  await ensureOffscreen();
+  try {
+    await ensureOffscreen();
+  } catch (e) {
+    return { ok: false, error: "OCR 后台未就绪：" + e.message };
+  }
   chrome.runtime.sendMessage({ type: "doOCR", reqId, image: msg.image });
-  const result = await done;          // offscreen 通过 ocrResult 回传 {text, error}
+  const result = await done;          // offscreen 通过 ocrResult 回传 {text, error, stage}
   ocrPending.delete(reqId);
-  if (result && result.error) throw new Error("OCR 失败：" + result.error);
+  if (result && result.error) return { ok: false, error: "OCR 识别失败：" + result.error };
   const text = (result && result.text || "").trim();
-  if (!text) throw new Error("未能识别到文字");
+  if (!text) return { ok: false, error: "OCR 未识别到文字（选区可能无文字或太模糊）" };
   const word = isWordLocal(text);
-  const tr = await handleTranslate({ text: text, word: word, hasCJK: false });
-  return { ok: true, text: text, data: tr.data };
+  try {
+    const tr = await handleTranslate({ text: text, word: word, hasCJK: false });
+    return { ok: true, text: text, data: tr.data };
+  } catch (e) {
+    return { ok: false, error: "翻译失败：" + e.message };
+  }
 }
 
 // 右键菜单

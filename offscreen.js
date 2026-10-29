@@ -8,6 +8,9 @@ let workerPromise = null;
 function getWorker() {
   if (workerPromise) return workerPromise;
   workerPromise = (async () => {
+    if (typeof Tesseract === "undefined" || typeof Tesseract.createWorker !== "function") {
+      throw new Error("Tesseract 引擎未加载（tesseract.min.js 未成功执行）");
+    }
     const { createWorker } = Tesseract;
     const worker = await createWorker("eng", 1, {
       workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
@@ -19,6 +22,8 @@ function getWorker() {
     await worker.setParameters({ tessedit_pageseg_mode: 6 });
     return worker;
   })();
+  // 失败时重置：否则 workerPromise 会永久保持 rejected，导致之后每次重试都以同样错误瞬间失败
+  workerPromise.catch(() => { workerPromise = null; });
   return workerPromise;
 }
 
@@ -32,14 +37,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     let error = "";
     // 整体超时保护：避免 tesseract 初始化/识别卡死导致前台永远“识别中”
     const watchdog = new Promise((_, rej) =>
-      setTimeout(() => rej(new Error("OCR 引擎初始化或识别超时（请到 edge://extensions 重载扩展后重试）")), 30000)
+      setTimeout(() => rej(new Error("OCR 引擎初始化或识别超时（30s）。可点“重新加载”重试；若反复失败请到 edge://extensions 重新加载扩展")), 30000)
     );
     try {
       const worker = await Promise.race([getWorker(), watchdog]);
       const res = await Promise.race([worker.recognize(msg.image), watchdog]);
       text = (res.data.text || "").replace(/\s+/g, " ").trim();
     } catch (e) {
-      error = e && e.message ? e.message : String(e);
+      // 保留堆栈前几行，便于在“复制错误”里定位根因
+      error = (e && e.message ? e.message : String(e));
+      if (e && e.stack) error += " :: " + e.stack.split("\n").slice(0, 3).join(" ").slice(0, 300);
     }
     // 通过独立的 runtime 消息把结果回传给后台 Service Worker（按 reqId 关联）
     chrome.runtime.sendMessage({ type: "ocrResult", reqId: msg.reqId, text: text, error: error });
