@@ -2,8 +2,9 @@
 
 const el = id => document.getElementById(id);
 
-chrome.storage.local.get(["enabled", "mode", "apiBase", "apiKey", "model"], s => {
+chrome.storage.local.get(["enabled", "screenshotEnabled", "mode", "apiBase", "apiKey", "model"], s => {
   el("enabled").checked = s.enabled !== false;
+  el("screenshotEnabled").checked = s.screenshotEnabled !== false;
   el("mode").value = s.mode || "free";
   el("apiBase").value = s.apiBase || "";
   el("apiKey").value = s.apiKey || "";
@@ -13,6 +14,7 @@ chrome.storage.local.get(["enabled", "mode", "apiBase", "apiKey", "model"], s =>
 el("save").onclick = () => {
   chrome.storage.local.set({
     enabled: el("enabled").checked,
+    screenshotEnabled: el("screenshotEnabled").checked,
     mode: el("mode").value,
     apiBase: el("apiBase").value.trim(),
     apiKey: el("apiKey").value.trim(),

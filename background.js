@@ -125,13 +125,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     handleTranslate(msg).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === "captureScreenshot") {
+    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError || !dataUrl) {
+        sendResponse({ ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "截图失败" });
+      } else {
+        sendResponse({ ok: true, dataUrl });
+      }
+    });
+    return true;
+  }
 });
 
 // 右键菜单
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: "wb-translate", title: "翻译选中内容", contexts: ["selection"] });
+  chrome.contextMenus.create({ id: "wb-screenshot", title: "截图翻译（框选识别）", contexts: ["page", "image"] });
 });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === "wb-screenshot") { sendStartScreenshot(tab); return; }
   if (info.menuItemId !== "wb-translate" || !info.selectionText) return;
   const word = isWordLocal(info.selectionText);
   const hasCJK = /[一-鿿]/.test(info.selectionText);
@@ -141,3 +153,28 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     chrome.tabs.sendMessage(tab.id, { type: "showTranslation", text: info.selectionText, word, data: { ok: false, error: e.message } });
   });
 });
+
+// ===== 截图翻译触发 =====
+async function sendStartScreenshot(tab) {
+  if (!tab || !tab.id) return;
+  const s = await chrome.storage.local.get(["enabled", "screenshotEnabled"]);
+  if (s.enabled === false) {
+    chrome.tabs.sendMessage(tab.id, { type: "toast", text: "扩展已关闭（可在选项中开启）" });
+    return;
+  }
+  if (s.screenshotEnabled === false) {
+    chrome.tabs.sendMessage(tab.id, { type: "toast", text: "截图翻译已关闭（可在选项中开启）" });
+    return;
+  }
+  chrome.tabs.sendMessage(tab.id, { type: "startScreenshot" });
+}
+
+function activeTab(cb) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => { if (tabs[0]) cb(tabs[0]); });
+}
+
+chrome.commands.onCommand.addListener((cmd) => {
+  if (cmd === "start-screenshot") activeTab(sendStartScreenshot);
+});
+
+chrome.action.onClicked.addListener((tab) => sendStartScreenshot(tab));

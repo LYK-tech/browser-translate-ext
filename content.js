@@ -135,10 +135,15 @@
         p.querySelector(".wb-body").innerHTML = renderError((msg.data && msg.data.error) || "翻译失败");
         position(rect);
       }
+    } else if (msg.type === "startScreenshot") {
+      startScreenshot();
+    } else if (msg.type === "toast") {
+      showToast(msg.text);
     }
   });
 
   async function onSelect() {
+    if (shotLayer) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return;
     let node = sel.anchorNode;
@@ -172,7 +177,141 @@
   document.addEventListener("mousedown", (e) => {
     if (panel && !panel.contains(e.target)) removePanel();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") removePanel(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { removePanel(); exitShot(); } });
+
+  // ===== 截图翻译 =====
+  const OCR_OPTS = {
+    workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
+    corePath: chrome.runtime.getURL("ocr/tesseract-core.wasm.js"),
+    langPath: chrome.runtime.getURL("ocr/")
+  };
+
+  let shotLayer = null, shotImg = null, selBox = null, startX = 0, startY = 0;
+
+  function exitShot() {
+    if (shotLayer && shotLayer.parentNode) shotLayer.parentNode.removeChild(shotLayer);
+    shotLayer = null; shotImg = null; selBox = null;
+  }
+
+  function showShotLayer() {
+    shotLayer = document.createElement("div");
+    shotLayer.style.cssText = "position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(0,0,0,.35)";
+    const img = document.createElement("img");
+    img.src = shotImg.src;
+    img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:none;pointer-events:none;opacity:.6";
+    shotLayer.appendChild(img);
+    selBox = document.createElement("div");
+    selBox.style.cssText = "position:absolute;border:2px dashed #3b82f6;background:rgba(59,130,246,.12);display:none";
+    shotLayer.appendChild(selBox);
+    const tip = document.createElement("div");
+    tip.textContent = "框选要翻译的英文区域，松开即识别（Esc 取消）";
+    tip.style.cssText = "position:absolute;top:12px;left:50%;transform:translateX(-50%);background:#1f2329;color:#fff;padding:6px 12px;border-radius:8px;font-size:13px;z-index:2;white-space:nowrap";
+    shotLayer.appendChild(tip);
+    document.body.appendChild(shotLayer);
+
+    shotLayer.addEventListener("mousedown", (e) => {
+      if (e.target !== shotLayer && e.target !== img) return;
+      startX = e.clientX; startY = e.clientY;
+      selBox.style.display = "block";
+      selBox.style.left = startX + "px"; selBox.style.top = startY + "px";
+      selBox.style.width = "0px"; selBox.style.height = "0px";
+      e.preventDefault();
+    });
+    shotLayer.addEventListener("mousemove", (e) => {
+      if (selBox.style.display !== "block") return;
+      const x = Math.min(e.clientX, startX), y = Math.min(e.clientY, startY);
+      selBox.style.left = x + "px"; selBox.style.top = y + "px";
+      selBox.style.width = Math.abs(e.clientX - startX) + "px";
+      selBox.style.height = Math.abs(e.clientY - startY) + "px";
+    });
+    shotLayer.addEventListener("mouseup", () => {
+      if (selBox.style.display !== "block") return;
+      const rect = selBox.getBoundingClientRect();
+      selBox.style.display = "none";
+      if (rect.width < 8 || rect.height < 8) return;
+      doOCR(rect);
+    });
+  }
+
+  function startScreenshot() {
+    if (shotLayer) return;
+    chrome.runtime.sendMessage({ type: "captureScreenshot" }, (resp) => {
+      if (chrome.runtime.lastError || !resp || !resp.ok) {
+        showToast("截图失败：" + ((resp && resp.error) || "未知错误"));
+        return;
+      }
+      shotImg = new Image();
+      shotImg.onload = showShotLayer;
+      shotImg.onerror = () => showToast("截图加载失败");
+      shotImg.src = resp.dataUrl;
+    });
+  }
+
+  async function doOCR(rect) {
+    try {
+      const natW = shotImg.naturalWidth, natH = shotImg.naturalHeight;
+      const dispW = shotImg.width || shotLayer.clientWidth;
+      const dispH = shotImg.height || shotLayer.clientHeight;
+      const scaleX = natW / dispW, scaleY = natH / dispH;
+      const sx = Math.max(0, rect.left * scaleX), sy = Math.max(0, rect.top * scaleY);
+      const sw = Math.max(1, rect.width * scaleX), sh = Math.max(1, rect.height * scaleY);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(sw); canvas.height = Math.round(sh);
+      canvas.getContext("2d").drawImage(shotImg, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const cropUrl = canvas.toDataURL("image/png");
+
+      showFloatAt(rect, "⟳ OCR 识别中…");
+      const res = await Tesseract.recognize(cropUrl, "eng", OCR_OPTS);
+      const text = (res.data.text || "").replace(/\s+/g, " ").trim();
+      removePanel();
+      if (!text) { showFloatAt(rect, "未能识别到文字").classList.add("wb-err"); return; }
+      const word = isWord(text);
+      chrome.runtime.sendMessage({ type: "translate", text: text, word: word, hasCJK: false }, (r) => {
+        if (chrome.runtime.lastError || !r || !r.ok) {
+          showFloatAt(rect, (r && r.error) || "翻译失败").classList.add("wb-err");
+          return;
+        }
+        const p = render(text, r.data, word);
+        positionRect(p, rect);
+      });
+    } catch (err) {
+      removePanel();
+      showFloatAt(rect, "OCR 失败：" + err.message).classList.add("wb-err");
+    } finally {
+      exitShot();
+    }
+  }
+
+  function showFloatAt(rect, txt) {
+    removePanel();
+    panel = document.createElement("div");
+    panel.className = "wb-trans-panel";
+    panel.innerHTML = '<div class="wb-trans-loading">' + esc(txt) + "</div>";
+    document.body.appendChild(panel);
+    positionRect(panel, rect);
+    return panel;
+  }
+
+  function positionRect(p, rect) {
+    if (!p) return;
+    const sx = window.scrollX, sy = window.scrollY;
+    let left = rect.left + sx;
+    let top = rect.bottom + sy + 8;
+    p.style.position = "absolute";
+    p.style.left = left + "px";
+    p.style.top = top + "px";
+    const pr = p.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) p.style.left = Math.max(8 + sx, window.innerWidth - 8 - pr.width + sx) + "px";
+    if (pr.bottom > window.innerHeight - 8) p.style.top = (rect.top + sy - pr.height - 8) + "px";
+  }
+
+  function showToast(txt) {
+    const t = document.createElement("div");
+    t.textContent = txt;
+    t.style.cssText = "position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#1f2329;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.25)";
+    document.body.appendChild(t);
+    setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
+  }
 
   injectCSS();
 })();
