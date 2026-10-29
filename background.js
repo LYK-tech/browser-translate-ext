@@ -9,15 +9,24 @@ function isWordLocal(t) {
 }
 
 async function gtranslate(text, sl, tl) {
-  const url = `${GT}&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(text)}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("翻译服务不可用");
-  const data = await r.json();
-  let out = "";
-  if (data && data[0]) {
-    for (const seg of data[0]) if (seg && seg[0]) out += seg[0];
+  // 依次尝试官方域名与国内镜像，提升在受限网络下的可用性
+  const hosts = [
+    "https://translate.googleapis.com/translate_a/single?client=gtx",
+    "https://translate.google.cn/translate_a/single?client=gtx"
+  ];
+  let lastErr = null;
+  for (const host of hosts) {
+    try {
+      const url = `${host}&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(text)}`;
+      const r = await fetch(url);
+      if (!r.ok) { lastErr = new Error("HTTP " + r.status); continue; }
+      const data = await r.json();
+      let out = "";
+      if (data && data[0]) for (const seg of data[0]) if (seg && seg[0]) out += seg[0];
+      if (out.trim()) return out.trim();
+    } catch (e) { lastErr = e; }
   }
-  return out.trim();
+  throw new Error("翻译服务不可用（请检查网络，或在选项中改用大模型翻译）");
 }
 
 async function dictWord(word) {
@@ -97,23 +106,29 @@ async function handleTranslate(msg) {
   const tl = onlyCJK ? "en" : "zh-CN";
 
   if (word && !onlyCJK) {
-    const d = await dictWord(text);
-    if (d.notFound) {
+    try {
+      const d = await dictWord(text);
+      if (d.notFound) {
+        const tr = await gtranslate(text, "en", "zh-CN");
+        return { ok: true, data: { word: text, notFound: true, translation: tr } };
+      }
+      // 把每组释义翻译成中文
+      await Promise.all(d.meanings.map(async (m) => {
+        const joined = m.defs.map(x => x.def).join("\n");
+        try {
+          const zh = await gtranslate(joined, "en", "zh-CN");
+          const parts = zh.split("\n").map(s => s.trim()).filter(Boolean);
+          if (parts.length) {
+            m.defs.forEach((x, i) => { if (parts[i]) x.def = parts[i]; });
+          }
+        } catch (e) { /* 保留英文原释义 */ }
+      }));
+      return { ok: true, data: { word: text, phonetic: d.phonetic, meanings: d.meanings } };
+    } catch (e) {
+      // 词典接口不可用（如网络受限）则退化为直接翻译单词
       const tr = await gtranslate(text, "en", "zh-CN");
       return { ok: true, data: { word: text, notFound: true, translation: tr } };
     }
-    // 把每组释义翻译成中文
-    await Promise.all(d.meanings.map(async (m) => {
-      const joined = m.defs.map(x => x.def).join("\n");
-      try {
-        const zh = await gtranslate(joined, "en", "zh-CN");
-        const parts = zh.split("\n").map(s => s.trim()).filter(Boolean);
-        if (parts.length) {
-          m.defs.forEach((x, i) => { if (parts[i]) x.def = parts[i]; });
-        }
-      } catch (e) { /* 保留英文原释义 */ }
-    }));
-    return { ok: true, data: { word: text, phonetic: d.phonetic, meanings: d.meanings } };
   }
 
   const tr = await gtranslate(text, sl, tl);
@@ -139,28 +154,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     handleOCR(msg).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === "ocrResult") {  // 来自 offscreen 文档：OCR 文本回传
+    const resolve = ocrPending.get(msg.reqId);
+    if (resolve) { ocrPending.delete(msg.reqId); resolve(msg); }
+    return false;  // 无需回复
+  }
 });
 
-// ===== 截图翻译：在后台用本地 OCR 识别裁剪图，再翻译 =====
-// 延迟（懒）加载 tesseract：避免顶层 importScripts 在 SW 启动时抛错导致整个后台脚本注册失败
-// （一旦后台脚本注册失败，键盘快捷键、右键菜单、工具栏点击等全部失效）。
-let _tesseractLoaded = false;
-function ensureTesseract() {
-  if (_tesseractLoaded) return;
-  importScripts(chrome.runtime.getURL("ocr/tesseract.min.js"));
-  _tesseractLoaded = true;
+// ===== 截图翻译：把裁剪图交给后台的 Offscreen Document 做本地 OCR，再翻译 =====
+// 重要：tesseract.js 必须在“真正的文档”里运行——Service Worker 没有 DOM、也不能创建子 Worker，
+// 因此无法承载 tesseract。MV3 正确做法是用 chrome.offscreen 开一个隐藏文档跑 OCR
+// （offscreen 文档以扩展源站运行、支持 DOM 与 Worker，可正常加载本地 wasm 与语言包）。
+let offscreenCreating = null;
+async function ensureOffscreen() {
+  if (offscreenCreating) { await offscreenCreating; return; }
+  try {
+    if (chrome.runtime.getContexts) {
+      const ctx = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+        documentUrls: [chrome.runtime.getURL("offscreen.html")]
+      });
+      if (ctx.length) return;
+    }
+  } catch (e) { /* 旧版本无 getContexts，跳过检查即可 */ }
+  offscreenCreating = chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["WORKERS"],
+    justification: "运行本地 OCR 引擎（tesseract.js）以识别截图中无法选中复制的英文文字"
+  }).catch(() => {});
+  await offscreenCreating;
+  offscreenCreating = null;
 }
 
+// ocrTranslate(来自 content) -> 交给 offscreen 做 OCR -> ocrResult(来自 offscreen) -> 翻译
+const ocrPending = new Map();
+let ocrReqId = 0;
+
 async function handleOCR(msg) {
-  try { ensureTesseract(); } catch (e) { throw new Error("OCR 引擎加载失败：" + e.message); }
-  if (typeof Tesseract === "undefined") throw new Error("OCR 引擎未加载，请重载扩展");
-  const OCR_OPTS = {
-    workerPath: chrome.runtime.getURL("ocr/worker.min.js"),
-    corePath: chrome.runtime.getURL("ocr/tesseract-core.wasm.js"),
-    langPath: chrome.runtime.getURL("ocr/")
-  };
-  const res = await Tesseract.recognize(msg.image, "eng", OCR_OPTS);
-  const text = (res.data.text || "").replace(/\s+/g, " ").trim();
+  const reqId = ++ocrReqId;
+  const done = new Promise((resolve) => ocrPending.set(reqId, resolve));
+  await ensureOffscreen();
+  chrome.runtime.sendMessage({ type: "doOCR", reqId, image: msg.image });
+  const result = await done;          // offscreen 通过 ocrResult 回传 {text, error}
+  ocrPending.delete(reqId);
+  if (result && result.error) throw new Error("OCR 失败：" + result.error);
+  const text = (result && result.text || "").trim();
   if (!text) throw new Error("未能识别到文字");
   const word = isWordLocal(text);
   const tr = await handleTranslate({ text: text, word: word, hasCJK: false });

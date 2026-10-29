@@ -3,7 +3,7 @@
   "name": "划词翻译 · 英中",
   "version": "1.1",
   "description": "网页划词即译（英→中）：选中英文即时翻译，单词给出音标、词性与多个义项，句子/短语直接译为中文。新增「截图翻译」：对无法选中复制的英文（图片、Canvas、PDF 等渲染的文字），可用快捷键或右键框选截图，离线 OCR 识别后即时翻译，中文浮动显示在选区旁，无需粘贴。内置免费引擎（开箱即用）并支持接入多种大模型。",
-  "permissions": ["storage", "contextMenus", "activeTab"],
+  "permissions": ["storage", "contextMenus", "activeTab", "offscreen"],
   "host_permissions": [
     "https://api.dictionaryapi.dev/*",
     "https://translate.googleapis.com/*",
