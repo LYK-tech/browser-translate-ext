@@ -17,6 +17,7 @@
 .wb-pos li{margin:4px 0}
 .wb-ex{color:#7a8290;font-size:12px;margin-top:2px;font-style:italic;word-break:break-word}
 .wb-err{color:#d4380d}
+.wb-retry{margin-top:10px;background:#3b82f6;color:#fff;border:0;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
 .wb-trans-loading{padding:14px;color:#888}
 `;
 
@@ -260,12 +261,18 @@
       const cropUrl = canvas.toDataURL("image/png");
 
       showFloatAt(rect, "⟳ OCR 识别中…");
-      const resp = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "ocrTranslate", image: cropUrl }, resolve);
+      // 加超时保护：后台若一直不回，35s 后给出可重试的错误，而不是永远“识别中”
+      const resp = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error("OCR 请求超时（请到 edge://extensions 重载扩展后重试）")), 35000);
+        chrome.runtime.sendMessage({ type: "ocrTranslate", image: cropUrl }, (r) => {
+          clearTimeout(t);
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(r);
+        });
       });
       removePanel();
-      if (chrome.runtime.lastError || !resp || !resp.ok) {
-        showFloatAt(rect, (resp && resp.error) || "OCR/翻译失败").classList.add("wb-err");
+      if (!resp || !resp.ok) {
+        showOCRError(rect, (resp && resp.error) || "OCR/翻译失败");
         return;
       }
       const word = isWord(resp.text);
@@ -273,10 +280,18 @@
       positionRect(p, rect);
     } catch (err) {
       removePanel();
-      showFloatAt(rect, "OCR 失败：" + err.message).classList.add("wb-err");
+      showOCRError(rect, "OCR 失败：" + err.message);
     } finally {
       exitShot();
     }
+  }
+
+  function showOCRError(rect, msg) {
+    const p = showFloatAt(rect, "");
+    const box = p.querySelector(".wb-trans-loading");
+    box.innerHTML = '<div class="wb-err">' + esc(msg) + '</div><button class="wb-retry" type="button">重试</button>';
+    box.querySelector(".wb-retry").addEventListener("click", () => { removePanel(); startScreenshot(); });
+    return p;
   }
 
   function showFloatAt(rect, txt) {

@@ -23,14 +23,20 @@ function getWorker() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // 后台握手：确认 offscreen 已就绪
+  if (msg.type === "ocrPing") { sendResponse({ ready: true }); return false; }
   if (msg.type !== "doOCR") return false;
 
   (async () => {
     let text = "";
     let error = "";
+    // 整体超时保护：避免 tesseract 初始化/识别卡死导致前台永远“识别中”
+    const watchdog = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error("OCR 引擎初始化或识别超时（请到 edge://extensions 重载扩展后重试）")), 30000)
+    );
     try {
-      const worker = await getWorker();
-      const res = await worker.recognize(msg.image);
+      const worker = await Promise.race([getWorker(), watchdog]);
+      const res = await Promise.race([worker.recognize(msg.image), watchdog]);
       text = (res.data.text || "").replace(/\s+/g, " ").trim();
     } catch (e) {
       error = e && e.message ? e.message : String(e);

@@ -166,24 +166,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // 因此无法承载 tesseract。MV3 正确做法是用 chrome.offscreen 开一个隐藏文档跑 OCR
 // （offscreen 文档以扩展源站运行、支持 DOM 与 Worker，可正常加载本地 wasm 与语言包）。
 let offscreenCreating = null;
+// 握手：offscreen 文档加载并注册监听需要时间，createDocument 返回并不代表它已可收消息。
+// 因此反复 ping，直到 offscreen 回应 ready，再发 doOCR，避免消息丢失导致永久“识别中”。
+function waitForOffscreenReady(timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const ping = () => {
+      try {
+        chrome.runtime.sendMessage({ type: "ocrPing" }, (resp) => {
+          if (resp && resp.ready) return resolve();
+          if (Date.now() - start > timeoutMs) return reject(new Error("OCR 后台未就绪（请到 edge://extensions 重载扩展）"));
+          setTimeout(ping, 150);
+        });
+      } catch (e) {
+        setTimeout(ping, 150);
+      }
+    };
+    ping();
+  });
+}
 async function ensureOffscreen() {
-  if (offscreenCreating) { await offscreenCreating; return; }
-  try {
-    if (chrome.runtime.getContexts) {
-      const ctx = await chrome.runtime.getContexts({
-        contextTypes: ["OFFSCREEN_DOCUMENT"],
-        documentUrls: [chrome.runtime.getURL("offscreen.html")]
-      });
-      if (ctx.length) return;
+  if (!chrome.offscreen) throw new Error("当前浏览器不支持 Offscreen Document（请升级 Edge/Chrome 至 109+）");
+  if (offscreenCreating) { await offscreenCreating; }
+  else {
+    let exists = false;
+    try {
+      if (chrome.runtime.getContexts) {
+        const ctx = await chrome.runtime.getContexts({
+          contextTypes: ["OFFSCREEN_DOCUMENT"],
+          documentUrls: [chrome.runtime.getURL("offscreen.html")]
+        });
+        exists = ctx.length > 0;
+      }
+    } catch (e) { /* 旧版本无 getContexts，跳过检查即可 */ }
+    if (!exists) {
+      offscreenCreating = chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: ["WORKERS"],
+        justification: "运行本地 OCR 引擎（tesseract.js）以识别截图中无法选中复制的英文文字"
+      }).catch(() => {});
+      await offscreenCreating;
+      offscreenCreating = null;
     }
-  } catch (e) { /* 旧版本无 getContexts，跳过检查即可 */ }
-  offscreenCreating = chrome.offscreen.createDocument({
-    url: "offscreen.html",
-    reasons: ["WORKERS"],
-    justification: "运行本地 OCR 引擎（tesseract.js）以识别截图中无法选中复制的英文文字"
-  }).catch(() => {});
-  await offscreenCreating;
-  offscreenCreating = null;
+  }
+  await waitForOffscreenReady();   // 关键：确认 offscreen 已就绪再继续
 }
 
 // ocrTranslate(来自 content) -> 交给 offscreen 做 OCR -> ocrResult(来自 offscreen) -> 翻译
