@@ -189,11 +189,14 @@
 
   function showShotLayer() {
     shotLayer = document.createElement("div");
-    shotLayer.style.cssText = "position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(0,0,0,.35)";
+    shotLayer.style.cssText = "position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:#000;overflow:hidden";
     const img = document.createElement("img");
     img.src = shotImg.src;
-    img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill;pointer-events:none;opacity:.6";
+    img.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill;pointer-events:none;opacity:1";
     shotLayer.appendChild(img);
+    const tint = document.createElement("div");
+    tint.style.cssText = "position:absolute;inset:0;background:rgba(0,0,0,.3);pointer-events:none";
+    shotLayer.appendChild(tint);
     selBox = document.createElement("div");
     selBox.style.cssText = "position:absolute;border:2px dashed #3b82f6;background:rgba(59,130,246,.12);display:none";
     shotLayer.appendChild(selBox);
