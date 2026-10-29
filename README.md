@@ -73,9 +73,11 @@
 
 ```
 browser-translate-ext/
-├── manifest.json          # 扩展配置（MV3）：权限、快捷键、脚本注入
-├── background.js          # 后台 Service Worker：截图捕获、右键菜单、快捷键、翻译引擎调度
-├── content.js             # 内容脚本：划词浮层 + 截图框选 UI + 离线 OCR 调用
+├── manifest.json          # 扩展配置（MV3）：权限（含 offscreen）、快捷键、脚本注入
+├── background.js          # 后台 Service Worker：截图捕获、右键菜单、快捷键、翻译引擎调度、OCR 路由
+├── content.js             # 内容脚本：划词浮层 + 截图框选 UI，裁剪后委托后台做 OCR/翻译
+├── offscreen.html         # 隐藏文档（MV3 Offscreen Document）：承载本地 OCR 引擎
+├── offscreen.js          # 在 offscreen 文档中加载 tesseract.js 并执行离线 OCR
 ├── options.html           # 设置页
 ├── options.js             # 设置页逻辑（划词/截图开关、引擎切换、密钥存储）
 └── ocr/                   # 离线 OCR 资源（tesseract.js v5）
